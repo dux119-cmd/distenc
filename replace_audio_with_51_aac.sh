@@ -29,6 +29,7 @@ if ! [[ "$AUDIO_TRACK" =~ ^[0-9]+$ ]]; then
 fi
 
 # Temp files
+DECODED_AUDIO="/dev/shm/$$.decoded_audio.wav"
 ENCODED_AUDIO="/dev/shm/$$.encoded_audio.m4a"
 TEMP_JSON="/dev/shm/$$.json"
 OUTPUT_VIDEO="/dev/shm/$$.output_with_new_audio.mkv"
@@ -51,28 +52,26 @@ if [[ -d "${SOURCE_DIR:-}" ]]; then
     name=${f##*/}                     # strip directory
     if [[ "${name,,}" == "$lc_target" ]]; then
       SOURCE_VIDEO="$SOURCE_DIR/$name"
-      if [[ ! -f "${SOURCE_VIDEO:-}" ]]; then
-        echo "Could not find $SOURCE_VIDEO using case-insensitive matching in the source directory $SOURCE_DIR"
-        exit 1
-      fi
       break
     fi
   done
   shopt -u nullglob
 fi
 
-#        acompressor=threshold=-21dB:ratio=4:attack=200:release=1000,\
-#      dynaudnorm=f=500:g=5:p=0.85:s=5:m=3,\
-#      acompressor=threshold=-18dB:ratio=4:attack=20:release=250:knee=3dB:makeup=2dB,\
-#      alimiter=limit=0.9:attack=5:release=50"\
-
 # Apply normalization (audio-only)
+if [[ ! -f "${SOURCE_VIDEO:-}" ]]; then
+  echo "Could not find source for $TARGET_VIDEO using case-insensitive matching in the source directory $SOURCE_DIR"
+  exit 1
+fi
+
 ffmpeg -y -hide_banner -nostats -drc_scale 2.66 -i "$SOURCE_VIDEO" -vn -map "a:$AUDIO_TRACK" \
-    -af "aresample=resampler=soxr:osf=flt,\
-      firequalizer=gain_entry='entry(20,0);entry(150,1.2);entry(3000,1.2);entry(20000,0)',\
-      pan=5.1|c0=c0|c1=c1|c2=1.10*c2|c3=c3|c4=c4|c5=c5"\
-    -c:a pcm_f32le -ar 48000 -ac 6 -channel_layout 5.1 -f wav - | \
-  pv -a -T -B 5000M -L 25M -D 60  |\
+    -af "loudnorm=I=-17:TP=-3:LRA=11:linear=true,\
+         aresample=resampler=soxr:osf=flt:osr=48000,\
+         firequalizer=gain_entry='entry(20,0);entry(150,1.3);entry(3000,1.3);entry(20000,0)',\
+         pan=5.1|c0=c0|c1=c1|c2=1.15*c2|c3=c3|c4=c4|c5=c5,\
+         aresample=resampler=soxr:osf=s16"\
+    -ac 6 -channel_layout 5.1 -f wav - |\
+  pv -a -T -B 120M -L 15M -D 30  |\
   fdkaac -m 3 -p 2 --afterburner 1 -w 15024 -o "$ENCODED_AUDIO" -
 
 # Replace audio in target video
