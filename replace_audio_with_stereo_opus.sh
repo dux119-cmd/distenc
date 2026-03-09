@@ -13,7 +13,12 @@ if [[ $# -lt 2 || $# -gt 3 ]]; then
     exit 1
 fi
 
-SOURCE_VIDEO="$1"
+if [[ -d "$1" ]]; then
+  SOURCE_DIR="$1"
+else
+  SOURCE_VIDEO="$1"
+fi
+
 TARGET_VIDEO="$2"
 AUDIO_TRACK="${3:-0}"
 
@@ -24,12 +29,13 @@ if ! [[ "$AUDIO_TRACK" =~ ^[0-9]+$ ]]; then
 fi
 
 # Temp files
+DECODED_AUDIO="/dev/shm/$$.decoded_audio.wav"
 ENCODED_AUDIO="/dev/shm/$$.encoded_audio.mka"
 TEMP_JSON="/dev/shm/$$.json"
 OUTPUT_VIDEO="/dev/shm/$$.output_with_new_audio.mkv"
 
 cleanup() {
-    rm -f "$ENCODED_AUDIO" "$TEMP_JSON"
+ rm -f "$ENCODED_AUDIO" "$TEMP_JSON"
 }
 trap cleanup EXIT
 
@@ -38,43 +44,40 @@ get_json_value() {
     grep "$1" "$TEMP_JSON" | awk -F ':' '{print $2}' | tr -d ' ",'
 }
 
-echo "Step 1: Analyzing loudness (pass 1) from audio track $AUDIO_TRACK..."
-ffmpeg -hide_banner -nostats -i "$SOURCE_VIDEO" -vn -map "a:$AUDIO_TRACK" \
-  -af loudnorm=I=-23:TP=-2.0:LRA=7:print_format=json \
-  -f null - 2>&1 | tee "$TEMP_JSON"
-
-# Extract values
-measured_I=$(get_json_value 'input_i')
-measured_TP=$(get_json_value 'input_tp')
-measured_LRA=$(get_json_value 'input_lra')
-measured_thresh=$(get_json_value 'input_thresh')
-offset=$(get_json_value 'target_offset')
-
-echo
-echo "Step 2: Applying normalization with:"
-echo "  measured_I=$measured_I"
-echo "  measured_TP=$measured_TP"
-echo "  measured_LRA=$measured_LRA"
-echo "  measured_thresh=$measured_thresh"
-echo "  offset=$offset"
-echo
+if [[ -d "${SOURCE_DIR:-}" ]]; then
+  lc_target="${TARGET_VIDEO,,}"
+  found=""
+  shopt -s nullglob
+  for f in "$SOURCE_DIR"/*; do
+    name=${f##*/}                     # strip directory
+    if [[ "${name,,}" == "$lc_target" ]]; then
+      SOURCE_VIDEO="$SOURCE_DIR/$name"
+      break
+    fi
+  done
+  shopt -u nullglob
+fi
 
 # Apply normalization (audio-only)
+if [[ ! -f "${SOURCE_VIDEO:-}" ]]; then
+  echo "Could not find source for $TARGET_VIDEO using case-insensitive matching in the source directory $SOURCE_DIR"
+  exit 1
+fi
+
 ffmpeg -y -hide_banner -nostats -i "$SOURCE_VIDEO" -vn -map "a:$AUDIO_TRACK" \
-  -filter:a "loudnorm=I=-22:TP=-1.5:LRA=5:measured_I=$measured_I:measured_TP=$measured_TP:measured_LRA=$measured_LRA:measured_thresh=$measured_thresh:offset=$offset,aresample=matrix_encoding=dplii" \
-  -ac 2 -c:a libopus -b:a 96k -frame_duration 60 "$ENCODED_AUDIO"
+       -af "surround=flx=4:frx=4:fc_out=1.3, \
+       loudnorm=I=-18:LRA=3:TP=-1, \
+       aresample=resampler=soxr:osf=flt" \
+  -c:a libopus -ac 2 -b:a 112k -frame_duration 40 "$ENCODED_AUDIO"
+
 
 # Replace audio in target video
 mkvmerge -o "$OUTPUT_VIDEO" --clusters-in-meta-seek --no-date \
-    --audio-tracks 0 "$ENCODED_AUDIO" \
+    --aac-is-sbr 0:0 --audio-tracks 0 "$ENCODED_AUDIO" \
     --no-audio "$TARGET_VIDEO"
 
 # Add metadata
-mkvpropedit "$OUTPUT_VIDEO" --add-track-statistics-tags \
-  --edit track:1 --set name="Video track" \
-  --edit track:2 --set name="Audio track, stereo matrixed using Dolby Pro Logic II"
+mkvpropedit "$OUTPUT_VIDEO" --add-track-statistics-tags
 
 # Replace original
 mv -v -f "$OUTPUT_VIDEO" "$TARGET_VIDEO"
-
-echo "Done!"

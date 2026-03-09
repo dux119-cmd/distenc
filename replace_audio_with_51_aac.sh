@@ -65,14 +65,8 @@ if [[ ! -f "${SOURCE_VIDEO:-}" ]]; then
 fi
 
 ffmpeg -y -hide_banner -nostats -drc_scale 2.66 -i "$SOURCE_VIDEO" -vn -map "a:$AUDIO_TRACK" \
-    -af "loudnorm=I=-17:TP=-3:LRA=11:linear=true,\
-         aresample=resampler=soxr:osf=flt:osr=48000,\
-         firequalizer=gain_entry='entry(20,0);entry(150,1.3);entry(3000,1.3);entry(20000,0)',\
-         pan=5.1|c0=c0|c1=c1|c2=1.15*c2|c3=c3|c4=c4|c5=c5,\
-         aresample=resampler=soxr:osf=s16"\
-    -ac 6 -channel_layout 5.1 -f wav - |\
-  pv -a -T -B 120M -L 15M -D 30  |\
-  fdkaac -m 3 -p 2 --afterburner 1 -w 15024 -o "$ENCODED_AUDIO" -
+    -c:a pcm_f32le -ac 6 -channel_layout 5.1 -f wav - \
+| fdkaac -m 3 -p 2 --afterburner 1 -w 15024 -o "$ENCODED_AUDIO" -
 
 # Replace audio in target video
 mkvmerge -o "$OUTPUT_VIDEO" --clusters-in-meta-seek --no-date \
@@ -80,9 +74,7 @@ mkvmerge -o "$OUTPUT_VIDEO" --clusters-in-meta-seek --no-date \
     --no-audio "$TARGET_VIDEO"
 
 # Add metadata
-mkvpropedit "$OUTPUT_VIDEO" --add-track-statistics-tags \
-  --edit track:1 --set name="Video track" \
-  --edit track:2 --set name="Audio track"
+mkvpropedit "$OUTPUT_VIDEO" --add-track-statistics-tags
 
 # Replace original
 mv -v -f "$OUTPUT_VIDEO" "$TARGET_VIDEO"
