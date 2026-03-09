@@ -66,6 +66,7 @@ fi
 
 ffmpeg -y -hide_banner -nostats -i "$SOURCE_VIDEO" -vn -map "a:$AUDIO_TRACK" \
        -af "surround=flx=4:frx=4:fc_out=1.3, \
+       speechnorm,
        loudnorm=I=-18:LRA=3:TP=-1, \
        aresample=resampler=soxr:osf=flt" \
   -c:a libopus -ac 2 -b:a 112k -frame_duration 40 "$ENCODED_AUDIO"
